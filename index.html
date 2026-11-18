@@ -367,6 +367,7 @@ body.in-arch #panels{max-height:none;overflow:visible;border-bottom:0}
 <div class="row"><b>Compás de espera</b>
   <input id="zn" type="number" min="2" max="99" value="4" style="width:56px">
   <button data-a="rest">Crear Compás de Espera</button>
+  <button data-a="restold" title="Formato antiguo: redonda, cuadrada y longa">Formato antiguo</button>
   <button data-a="gp" title="Compás completo de Pausa General">G. P.</button>
 </div>
 <div class="fbr"></div>
@@ -961,14 +962,14 @@ function render(merge){
         const br0=breaksFor(p.blocks,p.head,{sw:SW,scale,wrap:{minSpacing:spv(),maxSpacing:spv()+1.2}});
         const fx=fixRepeats(abc,map,br0,br0.pb,p.head.length+1);abc=fx.abc;map=fx.map;PHM=fx.ph;setDash(abc,map,p.head.length+1);const br=fx.br;pbars=fx.pb;{const k=keyPrep(abc,map);abc=k.abc;map=k.map;kpd=true}
         const v=ABCJS.renderAbc(d,abc,opts({...PGO,scale,staffwidth:SW,lineBreaks:[br],warnings_id:'warn',clickListener:el=>pick(el,map)}));
-        post(d);abbr(d,true);if(v&&v[0]){tunes.push({tune:v[0],map});layoutPages(d,v[0],pbars)}done=true;
+        post(d);abbr(d,true);if(v&&v[0]){tunes.push({tune:v[0],map});try{oldRests(d)}catch(e){console.warn('oldRests',e)}layoutPages(d,v[0],pbars)}done=true;
       }catch(e){d.innerHTML=''}
     }
   }else{abc=fixVoices(ta.value);map=Array.from({length:abc.length},(_,i)=>i)}
   if(!done){
     if(!kpd){const k=keyPrep(abc,map);abc=k.abc;map=k.map}
     const v=ABCJS.renderAbc(d,abc,opts({...PGO,scale,staffwidth:SW,warnings_id:'warn',clickListener:el=>pick(el,map)}));
-    post(d);abbr(d,true);if(v&&v[0]){tunes.push({tune:v[0],map});layoutPages(d,v[0],pbars)}
+    post(d);abbr(d,true);if(v&&v[0]){tunes.push({tune:v[0],map});try{oldRests(d)}catch(e){console.warn('oldRests',e)}layoutPages(d,v[0],pbars)}
   }
   hl();
 }
@@ -1288,7 +1289,22 @@ function stripSecK(abc,map){
     return{abc:A,map:M};
   }catch(e){return{abc,map}}
 }
-function keyPrep(abc,map){
+var ORP=new Set();
+/* «Z!7»: compás de espera en formato antiguo. Se quita la marca y se recuerda dónde quedó cada silencio para dibujarlo después */
+function oldRestPrep(abc,map){
+  ORP=new Set();
+  try{
+    const re=/!old!(?=Z\d)|Z!(?=\d)/g;let m,cuts=[];
+    while((m=re.exec(abc)))cuts.push(m[0]==='Z!'?{s:m.index+1,l:1,z:m.index}:{s:m.index,l:5,z:m.index+5});
+    if(!cuts.length)return{abc,map};
+    let A='',M=[],last=0,rm=0;
+    cuts.forEach(c=>{A+=abc.slice(last,c.s);M=M.concat(map.slice(last,c.s));last=c.s+c.l;ORP.add(c.z-rm-(c.z>c.s?c.l:0));rm+=c.l});
+    A+=abc.slice(last);M=M.concat(map.slice(last));
+    return{abc:A,map:M};
+  }catch(e){ORP=new Set();return{abc,map}}
+}
+function keyPrep(abc,map){const k=keyPrep0(abc,map);return oldRestPrep(k.abc,k.map)}
+function keyPrep0(abc,map){
   {const q=stripSecK(abc,map);abc=q.abc;map=q.map}
   const out={abc,map};KEV={lead:{},mid:{}};
   try{
@@ -1403,6 +1419,41 @@ function keyDom(root){
         }
       });
       flush();
+    });
+  });
+}
+function oldRests(root){
+  if(!ORP.size||typeof tunes==='undefined')return;
+  tunes.forEach(({tune})=>{
+    const sl=tune.engraver&&tune.engraver.selectables;if(!sl)return;
+    sl.forEach(x=>{
+      const el=x.absEl&&x.absEl.abcelem,g=x.svgEl;
+      if(!el||!el.rest||el.rest.type!=='multimeasure'||!g||el.startChar==null)return;
+      let hit=false;ORP.forEach(q=>{if(q>=el.startChar&&q<el.endChar)hit=true});if(!hit)return;
+      const n=+el.rest.text;if(!(n>=1))return;
+      const c=g.getAttribute('class')||'',v=(c.match(/abcjs-v(\d+)/)||[])[1],w=g.closest('g.abcjs-staff-wrapper')||g.parentNode;
+      const st=[...w.children].find(k=>/(^|\s)abcjs-staff(\s|$)/.test(k.getAttribute('class')||'')&&new RegExp('abcjs-v'+v+'(\\s|$)').test(k.getAttribute('class')||''));
+      if(!st)return;
+      const ys=[...st.querySelectorAll('path')].map(p=>{const m=(p.getAttribute('d')||'').match(/^M\s*[\d.]+\s+([\d.]+)/);return m?+m[1]:null}).filter(y=>y!=null).sort((a,b)=>a-b);
+      if(ys.length!==5)return;
+      const sp=ys[1]-ys[0],pb=g.querySelector('path[data-name="rests.multimeasure"]');if(!pb)return;
+      const bb=pb.getBBox();let T=sp*.45,GAP=sp*.65,WW=sp*1.25;
+      const q=Math.floor(n/4),r=n%4,seq=[];
+      for(let i=0;i<q;i++)seq.push('L');
+      if(r===1)seq.push('W');if(r===2)seq.push('B');if(r===3){seq.push('B');seq.push('W')}
+      const wd0=k=>k==='W'?WW:T;let tot0=seq.reduce((a,k)=>a+wd0(k),0)+GAP*(seq.length-1);
+      const fit=Math.min(1,Math.max(bb.width*1.8,sp*9)/tot0);T*=fit;GAP*=fit;WW*=fit;   /* los muy largos se afinan para no pasar de las barras */
+      const wd=wd0,tot=seq.reduce((a,k)=>a+wd(k),0)+GAP*(seq.length-1);
+      let xx=bb.x+bb.width/2-tot/2;
+      const NS='http://www.w3.org/2000/svg',y2=ys[1],y3=ys[2],y4=ys[3],out=[];
+      seq.forEach(k=>{
+        const rc=document.createElementNS(NS,'rect');rc.setAttribute('x',xx);rc.setAttribute('width',wd(k));
+        if(k==='L'){rc.setAttribute('y',y2);rc.setAttribute('height',y4-y2)}
+        else if(k==='B'){rc.setAttribute('y',y2);rc.setAttribute('height',y3-y2)}
+        else{rc.setAttribute('y',y2);rc.setAttribute('height',sp*.5)}
+        rc.setAttribute('data-name','rests.old');out.push(rc);xx+=wd(k)+GAP;
+      });
+      pb.parentNode.insertBefore(out[0],pb);out.slice(1).forEach((o,i)=>out[i].after(o));pb.remove();
     });
   });
 }
@@ -1805,6 +1856,7 @@ const A={
   tie,mC:()=>{mode='c';lockDot=false;armed='';ui()},mL:()=>{mode='l';ui()},dot,sharp:()=>accid('^'),flat:()=>accid('_'),nat:()=>accid('='),o8u:()=>octave(1),o8d:()=>octave(-1),srest:()=>put('z'+lenStr(curDur,mode==='l'&&lockDot)+' '),bar:()=>put('| '),newx:newX,
   togglePiano,undo,redo,copyS:()=>copyS(false),cutS:()=>copyS(true),paste,del,
   rest:()=>ins(` Z${Math.max(2,+$('zn').value||4)}| `),
+  restold:()=>ins(` Z!${Math.max(2,+$('zn').value||4)}| `),
   gp:()=>ins(` "!fermata!\\nG.P." Z | `),
   sm:()=>{scale=Math.max(.55,+(scale-.04).toFixed(2));render()},sp:()=>{scale=Math.min(1.6,+(scale+.04).toFixed(2));render()},
   txt:()=>{const tm=ta.value.match(/^T:\s*(.+)$/m),nm=((tm?tm[1].replace(/[\/\\?%*:|"<>]/g,'').trim():'')||'partitura')+'.txt';saveFile(nm,ta.value)},
@@ -1907,7 +1959,7 @@ const HELP=[
  ['Sostenido / doble sostenido','^C ^^C'],['Bemol / doble bemol','_B __B'],['Becuadro','=F']]],
 ['Duraciones y silencios','La unidad es la negra. Una nota sola vale una negra; el número multiplica y la barra divide.',[
  ['Negra, blanca, redonda','C C2 C4'],['Corchea, semicorchea, fusa','C/2 C/4 C/8'],['Con puntillo','C3/2 C3/4','o también C>D (puntillo y corchea)'],
- ['Silencio (mismo valor)','z z2 z4'],['Compases de espera','Z4','4 compases de silencio, con el número sobre el pentagrama'],['Silencio invisible','x2']]],
+ ['Silencio (mismo valor)','z z2 z4'],['Compases de espera','Z4','4 compases de silencio, con el número sobre el pentagrama'],['Compases de espera (formato antiguo)','Z!7','longas (4), cuadrada (2) y redonda (1)'],['Silencio invisible','x2']]],
 ['Barras y repeticiones','',[
  ['Barra simple, doble, final','|  ||  |]'],['Repetición','|: ... :|'],['Casillas (con punto o coma)','|1. ... :|2. ...','también [1. [2, 3. [1-3.  o sin punto: |1 |2'],['Dos signos de repetición','::']]],
 ['Ligaduras y grupos','',[
