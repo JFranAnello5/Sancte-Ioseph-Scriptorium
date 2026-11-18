@@ -241,6 +241,7 @@ body.in-arch #panels{max-height:none;overflow:visible;border-bottom:0}
 <button data-bval="|] ">Barra final ( |] )</button>
 <button data-bval="[| ">Barra gruesa-fina ( [| )</button>
 <button data-bval="|; ">Barra discontinua ( |; )</button>
+<button data-bval="[|] ">Barra invisible ( [|] )</button>
 <button data-bval=" !breath!| ">Barra con coma de respiración</button>
 <div class="menu-sec">Repeticiones y casillas</div>
 <button data-bval="|: ">Abrir repetición ( |: )</button>
@@ -887,7 +888,7 @@ function scanBars(abc,start){
       if(c==='!'||c==='+'){const k=line.indexOf(c,i+1);i=k<0?line.length:k+1;continue}
       if(c==='{'){const k=line.indexOf('}',i+1);i=k<0?line.length:k+1;continue}
       if(c==='['&&/^\[[A-Za-z]:/.test(line.slice(i))){const k=line.indexOf(']',i);i=k<0?line.length:k+1;continue}
-      const b=line.slice(i).match(/^(?:\|\]|\|\||:\|:|:\|\||::|:\||\|:|\[\||\|)/);
+      const b=line.slice(i).match(/^(?:\[\|\]|\|\]|\|\||:\|:|:\|\||::|:\||\|:|\[\||\|)/);
       if(b){vt[cur].push({s:lo+i,e:lo+i+b[0].length,t:b[0]});i+=b[0].length}else i++;
     }
   });
@@ -951,20 +952,21 @@ function render(merge){
   let pbars=null;
   $('score').innerHTML='';tunes=[];
   const d=document.createElement('div');d.className='pg';$('score').append(d);
-  let abc,map,done=false;
+  let abc,map,done=false,kpd=false;
   if(p){
     const f=flat(p,false);abc=f.abc;map=f.map;
     PHM=[];DASH={d:[],counts:[]};
     if(hasMarks(p)||/\|:|::/.test(abc)||/\|;/.test(ta.value)){
       try{
         const br0=breaksFor(p.blocks,p.head,{sw:SW,scale,wrap:{minSpacing:spv(),maxSpacing:spv()+1.2}});
-        const fx=fixRepeats(abc,map,br0,br0.pb,p.head.length+1);abc=fx.abc;map=fx.map;PHM=fx.ph;setDash(abc,map,p.head.length+1);const br=fx.br;pbars=fx.pb;
+        const fx=fixRepeats(abc,map,br0,br0.pb,p.head.length+1);abc=fx.abc;map=fx.map;PHM=fx.ph;setDash(abc,map,p.head.length+1);const br=fx.br;pbars=fx.pb;{const k=keyPrep(abc,map);abc=k.abc;map=k.map;kpd=true}
         const v=ABCJS.renderAbc(d,abc,opts({...PGO,scale,staffwidth:SW,lineBreaks:[br],warnings_id:'warn',clickListener:el=>pick(el,map)}));
         post(d);abbr(d,true);if(v&&v[0]){tunes.push({tune:v[0],map});layoutPages(d,v[0],pbars)}done=true;
       }catch(e){d.innerHTML=''}
     }
   }else{abc=fixVoices(ta.value);map=Array.from({length:abc.length},(_,i)=>i)}
   if(!done){
+    if(!kpd){const k=keyPrep(abc,map);abc=k.abc;map=k.map}
     const v=ABCJS.renderAbc(d,abc,opts({...PGO,scale,staffwidth:SW,warnings_id:'warn',clickListener:el=>pick(el,map)}));
     post(d);abbr(d,true);if(v&&v[0]){tunes.push({tune:v[0],map});layoutPages(d,v[0],pbars)}
   }
@@ -1028,7 +1030,11 @@ function repIcons(){ document.querySelectorAll('#libr-main .chip:not([data-custo
 function barIcons(){
   document.querySelectorAll('#bmenu [data-bval]').forEach(b=>{
     if(b.querySelector('svg'))return;
-    let tk=b.dataset.bval.trim();const dash=tk==='|;';if(dash)tk='|';
+    let tk=b.dataset.bval.trim();
+    if(tk==='[|]'){const sv=document.createElementNS('http://www.w3.org/2000/svg','svg');sv.setAttribute('viewBox','0 0 44 30');sv.setAttribute('width','44');sv.setAttribute('height','30');sv.style.flex='none';
+      sv.innerHTML='<g stroke="currentColor" stroke-opacity=".55" stroke-width=".9"><path d="M0 5h44M0 11h44M0 17h44M0 23h44M0 29h44" transform="translate(0 -4)"/></g><path d="M22 1v24" stroke="currentColor" stroke-opacity=".6" stroke-width="1.5" stroke-dasharray="1.2 2.6" fill="none"/>';
+      b.insertBefore(sv,b.firstChild);return}
+    const dash=tk==='|;';if(dash)tk='|';
     tk=tk.replace(/^(\S*?\d)\.$/,'$1');
     const g=mini(`X:1\nM:none\nL:1/4\nK:C clef=none\nx ${tk} x\n`,{keepStaff:true,k:1.3,hmax:30});
     if(!g)return;
@@ -1242,9 +1248,167 @@ function subBr(root){
     });
   });
 }
+
+/* Cambios de armadura: se conserva la clave de cada voz y se muestran becuadros de todas las alteraciones anteriores */
+const KSF={C:0,G:1,D:2,A:3,E:4,B:5,F:-1};
+function clefOf(t){let m=t.match(/\bclef=([^\s\]]+)/);if(m)return m[1];m=t.match(/(?:^|\s)(treble|bass|alto|tenor|soprano|mezzosoprano|baritone|perc)(?=\s|$)/);return m?m[1]:null}
+function parseKey(t){
+  const m=t.trim().match(/^([A-G])([#b]?)\s*(maj(?:or)?|ion|min(?:or)?|m|aeo|mix|dor|phr|lyd|loc)?(?=\s|$)/i);if(!m)return null;
+  if(/\bexp\b/.test(t))return null;
+  const OFF={maj:0,ion:0,min:-3,m:-3,aeo:-3,mix:-1,dor:-2,phr:-4,lyd:1,loc:-5};
+  const md=(m[3]||'').toLowerCase();
+  const o=md===''||md==='ion'||md.startsWith('maj')?0:(md==='m'||md.startsWith('min')||md==='aeo')?-3:OFF[md.slice(0,3)];
+  const sf=KSF[m[1]]+7*(m[2]==='#'?1:m[2]==='b'?-1:0)+(o||0);
+  return Math.abs(sf)>7?null:{sf,txt:m[0].trim()};
+}
+var KEV={lead:{},mid:{}},KORD=['F','C','G','D','A','E','B'],KORF=['B','E','A','D','G','C','F'];
+/* abcjs falla (y la partitura desaparece) con [K:..] en una voz que comparte pentagrama «(1 2)» sin ser la primera: se quita, la armadura la manda la primera voz */
+function stripSecK(abc,map){
+  try{
+    const m=abc.match(/^%%(?:score|staves)[ \t]+(.*)$/m);if(!m||!/\(/.test(m[1]))return{abc,map};
+    const sec=new Set();let inP=false,first=false;
+    (m[1].match(/[\[\]{}()|<>]|[^\s\[\]{}()|<>]+/g)||[]).forEach(t=>{
+      if(t==='('){inP=true;first=true}else if(t===')')inP=false;
+      else if(!/^[\[\]{}|<>]$/.test(t)&&inP){if(first)first=false;else sec.add(t)}
+    });
+    if(!sec.size)return{abc,map};
+    const lines=abc.split('\n');let off=0,cur=null,cuts=[];
+    lines.forEach(ln=>{
+      const lo=off;off+=ln.length+1;
+      const mv=ln.match(/^V:(\S+)/);if(mv){cur=mv[1];return}
+      if(/^(%%|[A-Za-z]:)/.test(ln))return;
+      const re=/\[([VK]):([^\]]*)\]/g;let x;
+      while((x=re.exec(ln))){
+        if(x[1]==='V'){cur=x[2].trim().split(/\s+/)[0];continue}
+        if(sec.has(cur)&&!/clef=|bass|alto|tenor|treble|perc/i.test(x[2]))cuts.push([lo+x.index,x[0].length]);
+      }
+    });
+    cuts.sort((a,b)=>b[0]-a[0]);let A=abc,M=map.slice();
+    cuts.forEach(([p,l])=>{A=A.slice(0,p)+A.slice(p+l);M.splice(p,l)});
+    return{abc:A,map:M};
+  }catch(e){return{abc,map}}
+}
+function keyPrep(abc,map){
+  {const q=stripSecK(abc,map);abc=q.abc;map=q.map}
+  const out={abc,map};KEV={lead:{},mid:{}};
+  try{
+    const lines=abc.split('\n');let off=0,hk=null,hc='treble';const vc={},vk={},vi={},ord={};let cur='_',ed=[],nv=0;
+    const reg=id=>{if(!(id in vi)){vi[id]=nv++;vc[id]=hc;vk[id]=hk;ord[id]=-1}};
+    lines.forEach(ln=>{
+      const lo=off;off+=ln.length+1;
+      if(/^K:/.test(ln)){hk=parseKey(ln.slice(2));const c=clefOf(ln.slice(2));if(c)hc=c;return}
+      const mv=ln.match(/^V:(\S+)(.*)$/);
+      if(mv){reg(mv[1]);vc[mv[1]]=clefOf(mv[2])||hc;return}
+      if(/^(%%|[A-Za-z]:)/.test(ln)&&!/^\[/.test(ln))return;
+      const re=/\[([VK]):([^\]]*)\]/g;let m,first=true;
+      while((m=re.exec(ln))){
+        const before=ln.slice(0,m.index),atStart=/^\s*(\[V:[^\]]*\]\s*)*$/.test(before);
+        if(m[1]==='V'){const id=(m[2].trim().split(/\s+/)[0])||'_';reg(id);cur=id;if(atStart)ord[id]++;const c=clefOf(m[2].slice(id.length));if(c)vc[id]=c;continue}
+        reg(cur);
+        const c=clefOf(m[2]),sp=parseKey(m[2]),pv=vk[cur];
+        if(c)vc[cur]=c;const ck=vc[cur]||hc;
+        if(!c&&sp&&pv){
+          const n=Math.abs(pv.sf),ls=(pv.sf>0?KORD:KORF).slice(0,n).map(x=>'='+x).join(' ');
+          ed.push({p:lo+m.index,t:'[K:C'+(n?' exp '+ls:'')+' clef='+ck+']'});
+          const ev={o:pv.sf,n:sp.sf,c:ck};
+          if(atStart)KEV.lead[Math.max(ord[cur],0)+'|'+vi[cur]]=ev;else(KEV.mid[vi[cur]]=KEV.mid[vi[cur]]||[]).push(ev);
+        }
+        vk[cur]=sp;
+      }
+    });
+    if(!ed.length)return out;
+    ed.sort((a,b)=>b.p-a.p);let A=abc,M=map.slice();
+    ed.forEach(e=>{A=A.slice(0,e.p)+e.t+A.slice(e.p);M=M.slice(0,e.p).concat(Array(e.t.length).fill(-1),M.slice(e.p))});
+    out.abc=A;out.map=M;
+  }catch(e){console.warn('keyPrep',e)}
+  return out;
+}
+var KHP={};
+function keyHelp(clef){
+  if(KHP[clef])return KHP[clef];
+  const d=document.createElement('div');d.style.cssText='position:absolute;left:-9999px;top:0';document.body.append(d);
+  const q=(k)=>{d.innerHTML='';ABCJS.renderAbc(d,'X:1\nM:none\nL:1/4\nK:C exp '+k+' clef='+clef+'\nx|\n',{add_classes:true});
+    const st=d.querySelector('g.abcjs-staff').getBBox(),g=d.querySelector('g.abcjs-key-signature');
+    return{sy:st.y,sh:st.height,ps:g?[...g.querySelectorAll('path')].map(p=>({p:p.cloneNode(true),b:p.getBBox()})):[]}};
+  let H=null;
+  try{
+    const sh=q(KORD.map(x=>'^'+x).join(' ')),fl=q(KORF.map(x=>'_'+x).join(' ')),nt=q('=F');
+    if(sh.ps.length===7&&fl.ps.length===7&&nt.ps.length===1){
+      const f=fl.ps[0],s0=sh.ps[0];
+      H={sh,fl,nat:nt.ps[0],rf:(fl.sy+fl.sh/2-f.b.y)/f.b.height,rs:(sh.sy-s0.b.y)/s0.b.height};
+    }
+  }catch(e){}
+  d.remove();KHP[clef]=H;return H;
+}
+function keySynth(w,n,st,x0,ev,l){
+  const H=keyHelp(ev.c);if(!H||(!ev.o&&!ev.n))return null;
+  const NS='http://www.w3.org/2000/svg',g=document.createElementNS(NS,'g');
+  g.setAttribute('class','abcjs-staff-extra abcjs-key-signature abcjs-l'+l+' abcjs-v'+n);
+  const top=st.getBBox().y;let x=x0;
+  const put=(src,tx,ty)=>{const c=src.p.cloneNode(true);c.setAttribute('transform','translate('+tx+' '+ty+')');g.appendChild(c)};
+  if(ev.o){
+    const T=ev.o>0?H.sh:H.fl,r=ev.o>0?H.rs:H.rf,nb=H.nat.b;
+    for(let i=0;i<Math.abs(ev.o);i++){
+      const gb=T.ps[i].b,cy=gb.y+gb.height*r;
+      put(H.nat,x-nb.x,cy-(nb.y+nb.height/2)+top-T.sy);x+=nb.width+2.4;
+    }
+    x+=3.4-2.4;
+  }
+  if(ev.n){
+    const T=ev.n>0?H.sh:H.fl,x1=T.ps[0].b.x;
+    for(let i=0;i<Math.abs(ev.n);i++)put(T.ps[i],x-x1,top-T.sy);
+  }
+  return g;
+}
+function keyDom(root){
+  const cls=c=>c.getAttribute('class')||'';
+  const isX=c=>/abcjs-staff-extra/.test(cls(c)),isK=c=>isX(c)&&/abcjs-key-signature/.test(cls(c)),isC=c=>isX(c)&&/abcjs-clef/.test(cls(c));
+  const isT=c=>/abcjs-(note|rest|bar)(\s|$)/.test(cls(c));
+  const sig=c=>[...c.querySelectorAll('path')].map(p=>p.getAttribute('data-name')).join();
+  const ptr={};
+  [...root.querySelectorAll('g.abcjs-staff-wrapper')].forEach((w,j)=>{
+    const by={};[...w.children].forEach(c=>{const m=cls(c).match(/abcjs-v(\d+)/);if(m)(by[m[1]]=by[m[1]]||[]).push(c)});
+    Object.keys(by).forEach(n=>{
+      const list=by[n],st=list.find(c=>/(^|\s)abcjs-staff(\s|$)/.test(cls(c)));if(!st)return;
+      const l=(cls(w).match(/abcjs-l(\d+)/)||cls(list[0]).match(/abcjs-l(\d+)/)||[0,0])[1];
+      let ref=null,lead=true,run=[];
+      const apply=(rm,ev,x0)=>{
+        const g=keySynth(w,n,st,x0,ev,l);if(!g)return;
+        const ks=rm.filter(isK),keep=ks.length?ks[ks.length-1]:null;   /* se conserva el grupo de la armadura nueva para que siga siendo seleccionable */
+        rm.forEach(c=>{if(c!==keep)c.remove()});
+        if(keep){while(keep.firstChild)keep.removeChild(keep.firstChild);keep.removeAttribute('transform');[...g.childNodes].forEach(ch=>keep.appendChild(ch))}
+        else w.appendChild(g);
+      };
+      const flush=()=>{
+        const r=run;run=[];if(!r.length||!ref)return;
+        const mk=r.filter(c=>isC(c)&&c!==ref&&sig(c)===sig(ref));
+        if(!mk.length)return;
+        const q=KEV.mid[n]||[],ev=q[ptr[n]=ptr[n]||0];ptr[n]++;
+        const x0=mk[0].getBBox().x;
+        if(ev&&keyHelp(ev.c)){apply(r.filter(c=>isK(c)||mk.includes(c)),ev,x0)}
+      };
+      const leadRun=[];
+      list.forEach(c=>{
+        if(isC(c)||isK(c)){if(isC(c)&&!ref)ref=c;(lead?leadRun:run).push(c);return}
+        if(isT(c)){
+          if(lead){
+            lead=false;
+            const ev=KEV.lead[j+'|'+n];
+            if(ev&&ref){
+              const ks=leadRun.filter(isK),cs=leadRun.filter(x=>isC(x)&&x!==ref&&sig(x)===sig(ref));
+              const x0=ks.length?Math.min(...ks.map(k=>k.getBBox().x)):ref.getBBox().x+ref.getBBox().width+4;
+              apply(ks.concat(cs),ev,x0);
+            }
+          }else flush();
+        }
+      });
+      flush();
+    });
+  });
+}
 function post(root){
   try{syncInd()}catch(e){}
-  try{repFix(root)}catch(e){} try{subBr(root)}catch(e){} try{squeezeFix(root)}catch(e){}
+  try{repFix(root)}catch(e){} try{subBr(root)}catch(e){} try{keyDom(root)}catch(e){}try{root.querySelectorAll('text').forEach(t=>{if(/^element type /.test(t.textContent||''))(t.closest('g.abcjs-debug')||t.closest('g')||t).remove()})}catch(e){} try{squeezeFix(root)}catch(e){}
   try{root.querySelectorAll('text,tspan').forEach(t=>{const x=t.textContent;if(/^(D\.[CS]\.) al (fine|coda)$/.test(x))t.textContent=x.replace(/ al (\w)/,(m,c)=>' al '+c.toUpperCase())})}catch(e){}
   try{breathFix(root)}catch(e){}
   try{dashBars(root)}catch(e){}
@@ -2396,7 +2560,6 @@ document.addEventListener('keydown',e=>{
 </script>
 <script>
 /* Funcionamiento sin conexión e instalación como app (solo bajo http/https) */
-if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})})}
-</script>
+if('serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})})}</script>
 </body>
 </html>
